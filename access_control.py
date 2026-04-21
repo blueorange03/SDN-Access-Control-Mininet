@@ -5,9 +5,11 @@ from ryu.controller.handler import set_ev_cls
 from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet
 
+
 class ACLSwitch(app_manager.RyuApp):
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
 
+    # Only these MACs are allowed
     WHITELIST = {
         "00:00:00:00:00:01",
         "00:00:00:00:00:02"
@@ -17,6 +19,7 @@ class ACLSwitch(app_manager.RyuApp):
         super(ACLSwitch, self).__init__(*args, **kwargs)
         self.mac_to_port = {}
 
+    # Default rule \E2\86\92 send unknown packets to controller
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         datapath = ev.msg.datapath
@@ -27,6 +30,7 @@ class ACLSwitch(app_manager.RyuApp):
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
         self.add_flow(datapath, 0, match, actions)
 
+    # Function to install flow rules in switch
     def add_flow(self, datapath, priority, match, actions):
         parser = datapath.ofproto_parser
         ofproto = datapath.ofproto
@@ -42,6 +46,7 @@ class ACLSwitch(app_manager.RyuApp):
         )
         datapath.send_msg(mod)
 
+    # Packet handling
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
     def packet_in_handler(self, ev):
         msg = ev.msg
@@ -57,18 +62,16 @@ class ACLSwitch(app_manager.RyuApp):
         dpid = datapath.id
         in_port = msg.match['in_port']
 
-        # initialize switch table
+        # Initialize table
         self.mac_to_port.setdefault(dpid, {})
-
-        # learning
         self.mac_to_port[dpid][src] = in_port
 
-        # ACL check
+        # ACL CHECK
         if src not in self.WHITELIST:
-            self.logger.info(f"BLOCKED: {src}")
+            self.logger.info("BLOCKED: %s", src)
             return
 
-        # forwarding logic
+        # Forwarding decision
         if dst in self.mac_to_port[dpid]:
             out_port = self.mac_to_port[dpid][dst]
         else:
@@ -76,6 +79,11 @@ class ACLSwitch(app_manager.RyuApp):
 
         actions = [parser.OFPActionOutput(out_port)]
 
+
+        match = parser.OFPMatch(in_port=in_port, eth_src=src, eth_dst=dst)
+        self.add_flow(datapath, 1, match, actions)
+
+        # Send packet
         data = None
         if msg.buffer_id == ofproto.OFP_NO_BUFFER:
             data = msg.data
